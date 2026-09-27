@@ -16,6 +16,36 @@ function rgb(i: number) {
   return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`;
 }
 
+async function fetchGitHubRepo(fullName: string, domain: number) {
+  const parts = fullName.split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error('GitGlobe API unavailable and repository name is invalid');
+  }
+
+  const url = `https://api.github.com/repos/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`GitHub returned HTTP ${response.status}`);
+  }
+
+  const repo = await response.json();
+  return {
+    id: repo.id,
+    full_name: repo.full_name,
+    description: repo.description ?? null,
+    language: repo.language ?? null,
+    domain,
+    stars: repo.stargazers_count ?? 0,
+    summary: null,
+    onboarding_ease: null,
+    learning_value: null,
+    license: repo.license?.spdx_id || repo.license?.name || null,
+    pushed_at: repo.pushed_at ?? null,
+    is_archived: !!repo.archived,
+    _source: 'github',
+  };
+}
+
 /**
  * All hooks are called unconditionally at the top of this component,
  * before any early returns — this is required by React's Rules of Hooks.
@@ -37,11 +67,19 @@ export function RepoDetailPanel() {
     queryKey: ['repo', repoId, tileName, selectedId],
     queryFn: async () => {
       const params = tileName ? `?name=${encodeURIComponent(tileName)}` : '';
-      const res = await fetch(`${API}/repo/${repoId}${params}`).catch((e) => {
-        throw new Error(`Cannot reach ${new URL(API).host} (${e?.message ?? 'network error'})`);
-      });
-      if (!res.ok) throw new Error(`${new URL(API).host} returned HTTP ${res.status}`);
-      return res.json();
+
+      try {
+        const res = await fetch(`${API}/repo/${repoId}${params}`);
+        if (res.ok) return res.json();
+      } catch {
+        // The hosted API is optional for local exploration.
+      }
+
+      if (tileName) {
+        return fetchGitHubRepo(tileName, domain);
+      }
+
+      throw new Error('GitGlobe API unavailable and no GitHub repository name is available');
     },
     enabled: selectedId >= 0 && repoId > 0,
     retry: false,
@@ -55,7 +93,7 @@ export function RepoDetailPanel() {
     // a summary and would otherwise poll forever.
     refetchInterval: (query) => {
       const d = query.state.data;
-      if (!d || d.summary || (query.state.dataUpdateCount ?? 0) >= 6) return false;
+      if (!d || d.summary || d._source === 'github' || (query.state.dataUpdateCount ?? 0) >= 6) return false;
       return 3_500;
     },
   });
